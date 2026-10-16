@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect , useState } from 'react';
 import './App.css';
 import { supabase } from './supabase';
 
@@ -23,6 +23,35 @@ function App() {
   });
   const [selectedFile, setSelectedFile] = useState(null);
   const [message, setMessage] = useState('');
+  useEffect(() => {
+  loadPapers();
+}, []);
+
+async function loadPapers() {
+  const { data, error } = await supabase
+    .from('papers')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Failed to load papers:', error.message);
+    setMessage('Could not load papers: ' + error.message);
+    return;
+  }
+
+  setPapers(
+    data.map((row) => ({
+      id: row.id,
+      department: row.department,
+      semester: String(row.semester),
+      subject: row.subject,
+      subjectCode: row.subject_code || '',
+      year: String(row.exam_year),
+      fileName: row.file_path.split('/').pop(),
+      file_path: row.file_path,
+    }))
+  );
+}
 async function testSupabase() {
   const { data, error } = await supabase
     .from('papers')
@@ -37,47 +66,79 @@ async function testSupabase() {
   }
 }
  
-  function updateForm(event) {
-    const { name, value } = event.target;
+async function handleUpload(event) {
+  event.preventDefault();
 
-    setForm((previous) => ({
-      ...previous,
-      [name]: value,
-    }));
-
-    setMessage('');
+  if (!selectedFile) {
+    setMessage('Please select a PDF file.');
+    return;
   }
 
-  function handleUpload(event) {
-    event.preventDefault();
+  if (selectedFile.type !== 'application/pdf') {
+    setMessage('Only PDF files are allowed.');
+    return;
+  }
 
-    if (!selectedFile) {
-      setMessage('Please select a PDF file.');
-      return;
+  if (!form.department || !form.semester || !form.subject.trim()) {
+    setMessage('Please complete all required fields.');
+    return;
+  }
+
+  setMessage('Uploading paper...');
+
+  const safeName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filePath = `${crypto.randomUUID()}-${safeName}`;
+
+  try {
+    // 1. Upload PDF to Supabase Storage
+    const { error: storageError } = await supabase.storage
+      .from('question-papers')
+      .upload(filePath, selectedFile, {
+        contentType: 'application/pdf',
+        upsert: false,
+      });
+
+    if (storageError) {
+      throw storageError;
     }
 
-    if (selectedFile.type !== 'application/pdf') {
-      setMessage('Only PDF files are allowed.');
-      return;
+    // 2. Save paper details in the database
+    const { data, error: databaseError } = await supabase
+      .from('papers')
+      .insert({
+        department: form.department,
+        semester: Number(form.semester),
+        subject: form.subject.trim(),
+        subject_code: form.subjectCode.trim() || null,
+        exam_year: Number(form.year),
+        file_path: filePath,
+      })
+      .select()
+      .single();
+
+    if (databaseError) {
+      // Remove the uploaded file if saving its details fails
+      await supabase.storage
+        .from('question-papers')
+        .remove([filePath]);
+
+      throw databaseError;
     }
 
-    if (!form.department || !form.semester || !form.subject.trim()) {
-      setMessage('Please complete all required fields.');
-      return;
-    }
-
-    const newPaper = {
-      id: crypto.randomUUID(),
-      department: form.department,
-      semester: form.semester,
-      subject: form.subject.trim(),
-      subjectCode: form.subjectCode.trim(),
-      year: form.year,
-      fileName: selectedFile.name,
-      file: selectedFile,
-    };
-
-    setPapers((previous) => [newPaper, ...previous]);
+    // 3. Update the displayed list
+    setPapers((previous) => [
+      {
+        id: data.id,
+        department: data.department,
+        semester: String(data.semester),
+        subject: data.subject,
+        subjectCode: data.subject_code || '',
+        year: String(data.exam_year),
+        fileName: selectedFile.name,
+        file_path: data.file_path,
+      },
+      ...previous,
+    ]);
 
     setForm({
       department: '',
@@ -89,18 +150,26 @@ async function testSupabase() {
 
     setSelectedFile(null);
     event.target.reset();
-    setMessage('Paper added to this browser session successfully!');
+
+    setMessage('Paper uploaded and saved successfully!');
+    setActiveTab('dashboard');
+  } catch (error) {
+    console.error('Paper upload failed:', error);
+    setMessage(`Upload failed: ${error.message}`);
   }
+}
 
   function removePaper(id) {
     setPapers((previous) => previous.filter((paper) => paper.id !== id));
   }
 
-  function viewPaper(paper) {
-    const fileUrl = URL.createObjectURL(paper.file);
-    window.open(fileUrl, '_blank', 'noopener,noreferrer');
-    setTimeout(() => URL.revokeObjectURL(fileUrl), 60000);
-  }
+ function viewPaper(paper) {
+  const { data } = supabase.storage
+    .from('question-papers')
+    .getPublicUrl(paper.file_path);
+
+  window.open(data.publicUrl, '_blank', 'noopener,noreferrer');
+}
 
   return (
     <div className="admin-app">
