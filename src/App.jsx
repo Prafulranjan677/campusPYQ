@@ -116,14 +116,19 @@ async function handleUpload(event) {
       .select()
       .single();
 
-    if (databaseError) {
-      // Remove the uploaded file if saving its details fails
-      await supabase.storage
-        .from('question-papers')
-        .remove([filePath]);
+   if (databaseError) {
+  console.error('DATABASE INSERT ERROR:', databaseError);
 
-      throw databaseError;
-    }
+  setMessage(
+    `Database error: ${databaseError.message}`
+  );
+
+  await supabase.storage
+    .from('question-papers')
+    .remove([filePath]);
+
+  return;
+}
 
     // 3. Update the displayed list
     setPapers((previous) => [
@@ -466,9 +471,8 @@ async function handleUpload(event) {
               <div>
                 <h2>All question papers</h2>
                 <p>
-                  {papers.length} paper{papers.length === 1 ? '' : 's'} in
-                  this browser session
-                </p>
+  {papers.length} paper{papers.length === 1 ? '' : 's'} available
+</p>
               </div>
 
               <button
